@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv venv .venv
+      - run: uv pip install --python .venv/bin/python -e ".[dev]"
+      - name: ruff check
+        run: .venv/bin/ruff check src tests
+      - name: ruff format
+        run: .venv/bin/ruff format --check src tests
+      - name: mypy
+        run: .venv/bin/mypy src
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv venv --python ${{ matrix.python-version }} .venv
+      - run: uv pip install --python .venv/bin/python -e ".[dev]"
+      - name: pytest (offline, no smoke)
+        run: .venv/bin/pytest tests/ -v -m 'not smoke'

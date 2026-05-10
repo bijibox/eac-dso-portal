@@ -3,10 +3,11 @@
 Skipped unless the project root contains a ``.env`` file with valid credentials.
 Set ``EAC_USERNAME`` / ``EAC_PASSWORD`` (and optionally ``EAC_BASE_URL``).
 """
+
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import aiohttp
@@ -34,10 +35,13 @@ _USER = os.environ.get("EAC_USERNAME")
 _PASS = os.environ.get("EAC_PASSWORD")
 _BASE = os.environ.get("EAC_BASE_URL", DEFAULT_BASE_URL)
 
-pytestmark = pytest.mark.skipif(
-    not (_USER and _PASS),
-    reason="EAC_USERNAME / EAC_PASSWORD not configured (see .env.example)",
-)
+pytestmark = [
+    pytest.mark.smoke,
+    pytest.mark.skipif(
+        not (_USER and _PASS),
+        reason="EAC_USERNAME / EAC_PASSWORD not configured (see .env.example)",
+    ),
+]
 
 
 async def test_full_walk() -> None:
@@ -61,7 +65,7 @@ async def test_full_walk() -> None:
         latest = next((c for c in configs if c.removal_date is None), None)
         assert latest and latest.channels
 
-        end = datetime.now(timezone.utc)
+        end = datetime.now(UTC)
         start = end - timedelta(days=14)
 
         # Default (no mc_id) returns the summary channels only.
@@ -71,9 +75,7 @@ async def test_full_walk() -> None:
         # Per-channel fetch works for an interval channel too.
         interval_ch = next((ch for ch in latest.channels if ch.interval), None)
         if interval_ch is not None:
-            per_channel = await client.get_readings(
-                active.id, start, end, mc_id=interval_ch.id
-            )
+            per_channel = await client.get_readings(active.id, start, end, mc_id=interval_ch.id)
             assert per_channel
             # Interval channels report only `value`, no cumulative `reading`.
             for cr in per_channel:

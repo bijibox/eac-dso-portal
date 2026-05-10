@@ -32,6 +32,7 @@ dev = [
     "aioresponses>=0.7",
     "python-dotenv>=1",
     "ruff",
+    "mypy>=1.10",
 ]
 
 [project.urls]
@@ -45,3 +46,44 @@ packages = ["src/eac_dso_portal"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "smoke: end-to-end test against the real EAC portal (requires .env credentials)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific rules
+    "PLE",  # pylint errors
+]
+ignore = [
+    "E501",  # line too long (formatter handles)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]  # asserts in tests are fine
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[[tool.mypy.overrides]]
+module = ["aioresponses", "aioresponses.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Tests use fixtures and dynamic dispatch; partial typing is fine.
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
