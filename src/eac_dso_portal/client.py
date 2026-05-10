@@ -1,8 +1,9 @@
 """Async client for the EAC Distribution Web Portal REST API."""
+
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
@@ -72,9 +73,7 @@ class EacClient:
                 return
             text = await resp.text()
             if resp.status in (401, 403):
-                raise EacAuthError(
-                    f"Login rejected (HTTP {resp.status}): {text[:200]}"
-                )
+                raise EacAuthError(f"Login rejected (HTTP {resp.status}): {text[:200]}")
             raise EacApiError(resp.status, text, "/api/portal/login")
 
     # ----- internal -----
@@ -171,16 +170,18 @@ def _parse_meter_config(d: dict[str, Any]) -> MeterConfig:
     channels: list[MeasurementChannel] = []
     for cfg in d.get("configurationsList", []) or []:
         for mc in cfg.get("mcList", []) or []:
-            channels.append(MeasurementChannel(
-                id=str(mc["id"]),
-                type=mc.get("type", ""),
-                uom=mc.get("uom", ""),
-                tou=mc.get("tou", "") or "",
-                interval=bool(mc.get("interval")),
-                digits_left=int(mc.get("digitsLeft", 0) or 0),
-                digits_right=int(mc.get("digitsRight", 0) or 0),
-                raw=mc,
-            ))
+            channels.append(
+                MeasurementChannel(
+                    id=str(mc["id"]),
+                    type=mc.get("type", ""),
+                    uom=mc.get("uom", ""),
+                    tou=mc.get("tou", "") or "",
+                    interval=bool(mc.get("interval")),
+                    digits_left=int(mc.get("digitsLeft", 0) or 0),
+                    digits_right=int(mc.get("digitsRight", 0) or 0),
+                    raw=mc,
+                )
+            )
     return MeterConfig(
         serial_number=d.get("serialNumber"),
         manufacturer=d.get("manufacturer"),
@@ -197,7 +198,7 @@ def _parse_channel_readings(item: dict[str, Any]) -> ChannelReadings:
         channel_id=str(item["id"]),
         readings=tuple(
             Reading(
-                dt=_parse_dt(r["dt"]) or datetime.fromtimestamp(0, tz=timezone.utc),
+                dt=_parse_dt(r["dt"]) or datetime.fromtimestamp(0, tz=UTC),
                 value=float(r.get("value", 0.0)),
                 reading=float(r["reading"]) if r.get("reading") is not None else None,
             )
@@ -218,6 +219,6 @@ def _to_iso_z(dt: datetime) -> str:
     The API rejects offsets like ``+00:00`` and demands the literal ``Z``.
     """
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    dt_utc = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        dt = dt.replace(tzinfo=UTC)
+    dt_utc = dt.astimezone(UTC).replace(tzinfo=None)
     return dt_utc.isoformat(timespec="milliseconds") + "Z"

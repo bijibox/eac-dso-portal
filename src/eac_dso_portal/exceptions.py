@@ -1,4 +1,5 @@
 """Exceptions raised by :mod:`eac_dso_portal`."""
+
 from __future__ import annotations
 
 

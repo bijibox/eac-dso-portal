@@ -1,4 +1,5 @@
 """Async client for the EAC (Electricity Authority of Cyprus) Distribution Web Portal."""
+
 from .client import DEFAULT_BASE_URL, EacClient
 from .exceptions import EacApiError, EacAuthError, EacError, EacRateLimitError
 from .models import (
@@ -12,12 +13,12 @@ from .models import (
 
 __all__ = [
     "DEFAULT_BASE_URL",
-    "EacClient",
+    "ChannelReadings",
     "EacApiError",
     "EacAuthError",
+    "EacClient",
     "EacError",
     "EacRateLimitError",
-    "ChannelReadings",
     "MeasurementChannel",
     "MeterConfig",
     "Reading",
@@ -25,4 +26,4 @@ __all__ = [
     "UserDetails",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

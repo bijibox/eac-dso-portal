@@ -1,4 +1,5 @@
 """Data classes returned by :class:`eac_dso_portal.EacClient`."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "eac-dso-portal"
-version = "0.1.0"
+version = "0.1.1"
 description = "Async Python client for the EAC (Electricity Authority of Cyprus) Distribution Web Portal"
 readme = "README.md"
 license = { text = "MIT" }
