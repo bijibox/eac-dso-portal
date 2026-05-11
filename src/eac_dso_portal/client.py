@@ -103,7 +103,11 @@ class EacClient:
                 )
             if resp.status == 429:
                 raise EacRateLimitError(resp.status, await resp.text(), path)
-            if resp.status >= 400:
+            if resp.status != 200:
+                # Anything other than 200 is unexpected: the portal returns
+                # 200 for success and 4xx/5xx for errors, never 201/204/3xx.
+                # Raising explicitly produces a useful message rather than
+                # a confusing JSON decode failure on a 204 No Content.
                 raise EacApiError(resp.status, await resp.text(), path)
             return await resp.json()
 
