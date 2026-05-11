@@ -125,6 +125,18 @@ async def test_500_raises_api_error(session, mock_http, logged_in_client) -> Non
     assert exc_info.value.status == 500
 
 
+async def test_unexpected_2xx_raises_api_error(
+    session, mock_http, logged_in_client
+) -> None:
+    """The portal only ever returns 200 for success. A 204 means the contract
+    is broken and the next ``await resp.json()`` would fail with a confusing
+    message, so surface it as EacApiError instead."""
+    mock_http.get(URL_USER_DETAILS, status=204, body="")
+    with pytest.raises(EacApiError) as exc_info:
+        await logged_in_client.get_user_details()
+    assert exc_info.value.status == 204
+
+
 async def test_lazy_login_on_first_request(session, mock_http) -> None:
     """A request with no prior login() call should login automatically."""
     mock_http.post(URL_LOGIN, payload={"jwt": "auto"})
