@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 
+from aioresponses.core import CallbackResult
+
 from eac_dso_portal import Reading
 
 from .conftest import (
@@ -127,7 +129,7 @@ async def test_get_readings_summary_no_mc_id(
     """Calling without mc_id returns the default summary channels."""
     mock_http.post(URL_READINGS, payload=payload_readings_summary)
 
-    start = datetime(2026, 4, 1, tzinfo=UTC)
+    start = datetime(2026, 4, 20, tzinfo=UTC)
     end = datetime(2026, 5, 1, tzinfo=UTC)
     channels = await logged_in_client.get_readings("111", start, end)
 
@@ -209,3 +211,81 @@ async def test_get_readings_empty_channel(mock_http, logged_in_client) -> None:
     mock_http.post(URL_READINGS, payload=[{"id": "x", "readings": []}])
     channels = await logged_in_client.get_readings("111", datetime.now(UTC), datetime.now(UTC))
     assert channels[0].readings == ()
+
+
+async def test_get_readings_chunks_long_ranges(mock_http, logged_in_client) -> None:
+    """A range wider than chunk_days is split into back-to-back requests.
+
+    The portal caps each response at 1000 rows, so for 30-min channels a
+    request wider than about 20 days silently loses the tail. The client
+    must transparently chunk and merge.
+    """
+    captured: list[dict] = []
+
+    def handler(url, **kwargs):
+        from aioresponses.core import CallbackResult
+
+        body = kwargs.get("json")
+        captured.append(body)
+        start_iso = body["startDate"]
+        # Hand back a chunk whose readings depend on which window the
+        # client asked for. The middle reading sits on a chunk boundary
+        # to exercise dedup.
+        if start_iso.startswith("2026-04-01"):
+            payload = [
+                {
+                    "id": "mc-x",
+                    "readings": [
+                        {"dt": "2026-04-01T00:00:00", "value": 1.0},
+                        {"dt": "2026-04-15T00:00:00", "value": 2.0},
+                    ],
+                }
+            ]
+        elif start_iso.startswith("2026-04-15"):
+            payload = [
+                {
+                    "id": "mc-x",
+                    "readings": [
+                        {"dt": "2026-04-15T00:00:00", "value": 2.0},
+                        {"dt": "2026-04-29T00:00:00", "value": 3.0},
+                    ],
+                }
+            ]
+        else:
+            payload = [{"id": "mc-x", "readings": []}]
+        return CallbackResult(status=200, payload=payload)
+
+    # The handler is reusable across requests; register enough mocks for
+    # ceil(30/14) = 3 chunks.
+    for _ in range(3):
+        mock_http.post(URL_READINGS, callback=handler)
+
+    start = datetime(2026, 4, 1, tzinfo=UTC)
+    end = datetime(2026, 5, 1, tzinfo=UTC)  # 30 days at default 14-day chunks
+    channels = await logged_in_client.get_readings("111", start, end, mc_id="mc-x")
+
+    assert len(captured) == 3
+    cr = channels[0]
+    # Three unique readings after dedup of the April 15 boundary point.
+    assert len(cr.readings) == 3
+    dts = [r.dt for r in cr.readings]
+    assert dts == sorted(dts)
+
+
+async def test_get_readings_chunk_days_override(mock_http, logged_in_client) -> None:
+    """Override chunk_days to force more or fewer requests."""
+    captured: list[dict] = []
+
+    def handler(url, **kwargs):
+        captured.append(kwargs.get("json"))
+        return CallbackResult(status=200, payload=[{"id": "x", "readings": []}])
+
+    for _ in range(10):
+        mock_http.post(URL_READINGS, callback=handler)
+
+    start = datetime(2026, 4, 1, tzinfo=UTC)
+    end = datetime(2026, 5, 1, tzinfo=UTC)
+    await logged_in_client.get_readings("111", start, end, chunk_days=7)
+
+    # 30 days at 7-day chunks: Apr 1-8, 8-15, 15-22, 22-29, 29-May 1 = 5 calls
+    assert len(captured) == 5

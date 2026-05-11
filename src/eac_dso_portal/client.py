@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import aiohttp
@@ -118,11 +118,11 @@ class EacClient:
         return [_parse_service_point(d) for d in data]
 
     async def get_meter_configs(self, sp_id: str) -> list[MeterConfig]:
-        """Return *all* meters that have ever been installed on this service point.
+        """Return all meters that have ever been installed on this service point.
 
-        The portal returns a list of meter records (old + replacement). Each
-        record contains one or more configurations, and each configuration has
-        a list of measurement channels (mcList).
+        The portal returns a list of meter records (old plus any replacements).
+        Each record contains one or more configurations, and each configuration
+        has a list of measurement channels (mcList).
         """
         data = await self._request("GET", f"/api/portal/servicePoints/{sp_id}")
         return [_parse_meter_config(d) for d in data]
@@ -133,14 +133,53 @@ class EacClient:
         start: datetime,
         end: datetime,
         mc_id: str | None = None,
+        chunk_days: int = 14,
     ) -> list[ChannelReadings]:
         """Fetch readings for a service point.
 
         Without ``mc_id`` the API returns the default summary channels only
         (typically ``S-KWH-24H``). Pass an ``mc_id`` from
-        :meth:`get_meter_configs` to fetch a specific channel — including
+        :meth:`get_meter_configs` to fetch a specific channel, including
         30-minute load profile channels (``KWH-30MIN-LP-*``).
+
+        The portal caps each ``/readings/list`` response at 1000 rows. For a
+        30-minute channel that is roughly 1000 / 48 = 20 days of data, so a
+        wider request will silently lose the tail. When the requested range
+        is longer than ``chunk_days``, the call is transparently split into
+        back-to-back requests and the results merged, with duplicates on the
+        chunk boundaries dropped. ``chunk_days`` defaults to 14 which fits
+        the 1000-row cap for every channel type the portal exposes today.
         """
+        if end - start <= timedelta(days=chunk_days):
+            return await self._readings_request(sp_id, start, end, mc_id)
+
+        by_dt: dict[str, dict[datetime, Reading]] = {}
+        chunk_start = start
+        delta = timedelta(days=chunk_days)
+        while chunk_start < end:
+            chunk_end = min(chunk_start + delta, end)
+            chunk_data = await self._readings_request(sp_id, chunk_start, chunk_end, mc_id)
+            for cr in chunk_data:
+                bucket = by_dt.setdefault(cr.channel_id, {})
+                for r in cr.readings:
+                    bucket[r.dt] = r
+            chunk_start = chunk_end
+
+        return [
+            ChannelReadings(
+                channel_id=cid,
+                readings=tuple(sorted(rs.values(), key=lambda r: r.dt)),
+            )
+            for cid, rs in by_dt.items()
+        ]
+
+    async def _readings_request(
+        self,
+        sp_id: str,
+        start: datetime,
+        end: datetime,
+        mc_id: str | None,
+    ) -> list[ChannelReadings]:
         body: dict[str, Any] = {
             "spId": sp_id,
             "startDate": _to_iso_z(start),
