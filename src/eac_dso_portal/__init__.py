@@ -10,8 +10,10 @@ from .models import (
     ServicePoint,
     UserDetails,
 )
+from .time import CYPRUS, as_utc
 
 __all__ = [
+    "CYPRUS",
     "DEFAULT_BASE_URL",
     "ChannelReadings",
     "EacApiError",
@@ -24,6 +26,7 @@ __all__ = [
     "Reading",
     "ServicePoint",
     "UserDetails",
+    "as_utc",
 ]
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"

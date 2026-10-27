@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "eac-dso-portal"
-version = "0.2.1"
+version = "0.3.0"
 description = "Async Python client for the EAC (Electricity Authority of Cyprus) Distribution Web Portal"
 readme = "README.md"
 license = { text = "MIT" }
@@ -36,9 +36,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/santafox/eac-dso-portal"
-Issues = "https://github.com/santafox/eac-dso-portal/issues"
-"Home Assistant integration" = "https://github.com/santafox/ha-eac"
+Homepage = "https://github.com/bijibox/eac-dso-portal"
+Issues = "https://github.com/bijibox/eac-dso-portal/issues"
+"Home Assistant integration" = "https://github.com/bijibox/ha-eac"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/eac_dso_portal"]

@@ -130,7 +130,7 @@ async def test_get_readings_summary_no_mc_id(
     mock_http.post(URL_READINGS, payload=payload_readings_summary)
 
     start = datetime(2026, 4, 20, tzinfo=UTC)
-    end = datetime(2026, 5, 1, tzinfo=UTC)
+    end = datetime(2026, 5, 3, tzinfo=UTC)
     channels = await logged_in_client.get_readings("111", start, end)
 
     assert len(channels) == 1
@@ -157,7 +157,7 @@ async def test_get_readings_with_mc_id_includes_in_body(
 
     mock_http.post(URL_READINGS, callback=handler)
 
-    start = datetime(2026, 5, 1, tzinfo=UTC)
+    start = datetime(2026, 4, 30, tzinfo=UTC)
     end = datetime(2026, 5, 2, tzinfo=UTC)
     await logged_in_client.get_readings("111", start, end, mc_id="mc-30min-imp")
 
@@ -174,7 +174,7 @@ async def test_get_readings_interval_channel_has_no_cumulative(
     """30-min profile readings have value but no cumulative `reading`."""
     mock_http.post(URL_READINGS, payload=payload_readings_interval)
 
-    start = datetime(2026, 5, 1, tzinfo=UTC)
+    start = datetime(2026, 4, 30, tzinfo=UTC)
     end = datetime(2026, 5, 2, tzinfo=UTC)
     channels = await logged_in_client.get_readings("111", start, end, mc_id="mc-30min-imp")
     cr = channels[0]
@@ -202,8 +202,8 @@ async def test_get_readings_naive_datetime_treated_as_utc(
 
     naive = datetime(2026, 5, 1, 12, 0, 0)
     await logged_in_client.get_readings("111", naive, naive)
-    # 12:00 naive → 12:00 UTC in the body
-    assert captured[0]["startDate"] == "2026-05-01T12:00:00.000Z"
+    # Padded whole Cyprus days are serialized in UTC.
+    assert captured[0]["startDate"] == "2026-04-29T21:00:00.000Z"
 
 
 async def test_get_readings_empty_channel(mock_http, logged_in_client) -> None:
@@ -214,78 +214,46 @@ async def test_get_readings_empty_channel(mock_http, logged_in_client) -> None:
 
 
 async def test_get_readings_chunks_long_ranges(mock_http, logged_in_client) -> None:
-    """A range wider than chunk_days is split into back-to-back requests.
+    """Inclusive date-rounded pages overlap; each physical slot survives once."""
+    from datetime import timedelta
 
-    The portal caps each response at 1000 rows, so for 30-min channels a
-    request wider than about 20 days silently loses the tail. The client
-    must transparently chunk and merge.
-    """
-    captured: list[dict] = []
+    from eac_dso_portal import CYPRUS
+
+    captured = []
 
     def handler(url, **kwargs):
-        from aioresponses.core import CallbackResult
-
-        body = kwargs.get("json")
+        body = kwargs["json"]
         captured.append(body)
-        start_iso = body["startDate"]
-        # Hand back a chunk whose readings depend on which window the
-        # client asked for. The middle reading sits on a chunk boundary
-        # to exercise dedup.
-        if start_iso.startswith("2026-04-01"):
-            payload = [
-                {
-                    "id": "mc-x",
-                    "readings": [
-                        {"dt": "2026-04-01T00:00:00", "value": 1.0},
-                        {"dt": "2026-04-15T00:00:00", "value": 2.0},
-                    ],
-                }
-            ]
-        elif start_iso.startswith("2026-04-15"):
-            payload = [
-                {
-                    "id": "mc-x",
-                    "readings": [
-                        {"dt": "2026-04-15T00:00:00", "value": 2.0},
-                        {"dt": "2026-04-29T00:00:00", "value": 3.0},
-                    ],
-                }
-            ]
-        else:
-            payload = [{"id": "mc-x", "readings": []}]
-        return CallbackResult(status=200, payload=payload)
+        start = datetime.fromisoformat(body["startDate"]).astimezone(CYPRUS)
+        end = datetime.fromisoformat(body["endDate"]).astimezone(CYPRUS)
+        # Observed summer portal boundaries: 01:00 through next day 00:30.
+        dt = start.replace(hour=1)
+        end = end.replace(hour=1) + timedelta(days=1)
+        rows = []
+        while dt < end:
+            rows.append({"dt": dt.replace(tzinfo=None).isoformat(), "value": 0.001})
+            dt += timedelta(minutes=30)
+        return CallbackResult(status=200, payload=[{"id": "x", "readings": rows}])
 
-    # The handler is reusable across requests; register enough mocks for
-    # ceil(30/14) = 3 chunks.
-    for _ in range(3):
-        mock_http.post(URL_READINGS, callback=handler)
-
-    start = datetime(2026, 4, 1, tzinfo=UTC)
-    end = datetime(2026, 5, 1, tzinfo=UTC)  # 30 days at default 14-day chunks
-    channels = await logged_in_client.get_readings("111", start, end, mc_id="mc-x")
-
+    mock_http.post(URL_READINGS, callback=handler, repeat=True)
+    start = datetime(2026, 4, 1, tzinfo=CYPRUS)
+    end = datetime(2026, 5, 1, tzinfo=CYPRUS)
+    channels = await logged_in_client.get_readings("111", start, end, mc_id="x")
     assert len(captured) == 3
-    cr = channels[0]
-    # Three unique readings after dedup of the April 15 boundary point.
-    assert len(cr.readings) == 3
-    dts = [r.dt for r in cr.readings]
-    assert dts == sorted(dts)
+    assert len(channels[0].readings) == 30 * 48 + 1
+    assert channels[0].readings[0].dt == start.astimezone(UTC)
+    assert channels[0].readings[-1].dt == end.astimezone(UTC)
 
 
 async def test_get_readings_chunk_days_override(mock_http, logged_in_client) -> None:
-    """Override chunk_days to force more or fewer requests."""
-    captured: list[dict] = []
+    captured = []
 
     def handler(url, **kwargs):
-        captured.append(kwargs.get("json"))
+        captured.append(kwargs["json"])
         return CallbackResult(status=200, payload=[{"id": "x", "readings": []}])
 
-    for _ in range(10):
-        mock_http.post(URL_READINGS, callback=handler)
-
-    start = datetime(2026, 4, 1, tzinfo=UTC)
-    end = datetime(2026, 5, 1, tzinfo=UTC)
-    await logged_in_client.get_readings("111", start, end, chunk_days=7)
-
-    # 30 days at 7-day chunks: Apr 1-8, 8-15, 15-22, 22-29, 29-May 1 = 5 calls
+    mock_http.post(URL_READINGS, callback=handler, repeat=True)
+    await logged_in_client.get_readings(
+        "111", datetime(2026, 4, 1, tzinfo=UTC), datetime(2026, 5, 1, tzinfo=UTC), chunk_days=7
+    )
     assert len(captured) == 5

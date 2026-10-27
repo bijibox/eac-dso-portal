@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -17,6 +18,7 @@ from .models import (
     ServicePoint,
     UserDetails,
 )
+from .time import CYPRUS, normalize_readings
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -154,26 +156,36 @@ class EacClient:
         chunk boundaries dropped. ``chunk_days`` defaults to 14 which fits
         the 1000-row cap for every channel type the portal exposes today.
         """
-        if end - start <= timedelta(days=chunk_days):
-            return await self._readings_request(sp_id, start, end, mc_id)
+        if not 1 <= chunk_days <= 14:
+            raise ValueError("chunk_days must be between 1 and 14 (1000-row limit)")
+        # Public query arguments retain the original naive-as-UTC contract.
+        start = start.replace(tzinfo=UTC) if start.tzinfo is None else start.astimezone(UTC)
+        end = end.replace(tzinfo=UTC) if end.tzinfo is None else end.astimezone(UTC)
+        if start > end:
+            raise ValueError("start must not be after end")
 
+        # Fetch complete local days, including both folds even when the caller's
+        # boundary falls inside the repeated autumn hour. Requests overlap at
+        # midnight; deduplication is by UTC instant, never by wall-clock label.
+        chunk_start = start.astimezone(CYPRUS).replace(hour=0, minute=0, second=0, microsecond=0)
+        stop = end.astimezone(CYPRUS).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) + timedelta(days=1)
         by_dt: dict[str, dict[datetime, Reading]] = {}
-        chunk_start = start
-        delta = timedelta(days=chunk_days)
-        while chunk_start < end:
-            chunk_end = min(chunk_start + delta, end)
-            chunk_data = await self._readings_request(sp_id, chunk_start, chunk_end, mc_id)
+        while chunk_start < stop:
+            chunk_end = min(chunk_start + timedelta(days=chunk_days), stop)
+            chunk_data = await self._readings_request(
+                sp_id, chunk_start - timedelta(days=1), chunk_end + timedelta(days=1), mc_id
+            )
             for cr in chunk_data:
                 bucket = by_dt.setdefault(cr.channel_id, {})
                 for r in cr.readings:
-                    bucket[r.dt] = r
+                    if start <= r.dt <= end:
+                        bucket[r.dt] = r
             chunk_start = chunk_end
 
         return [
-            ChannelReadings(
-                channel_id=cid,
-                readings=tuple(sorted(rs.values(), key=lambda r: r.dt)),
-            )
+            ChannelReadings(channel_id=cid, readings=tuple(rs[dt] for dt in sorted(rs)))
             for cid, rs in by_dt.items()
         ]
 
@@ -192,6 +204,11 @@ class EacClient:
         if mc_id is not None:
             body["mcId"] = mc_id
         data = await self._request("POST", "/api/portal/readings/list", json_body=body)
+        if any(len(item.get("readings") or []) >= 1000 for item in data):
+            # Fail instead of silently accepting a truncated page.
+            raise EacApiError(
+                200, "Readings response reached the 1000-row cap", "/api/portal/readings/list"
+            )
         return [_parse_channel_readings(item) for item in data]
 
 
@@ -237,17 +254,20 @@ def _parse_meter_config(d: dict[str, Any]) -> MeterConfig:
 
 
 def _parse_channel_readings(item: dict[str, Any]) -> ChannelReadings:
-    return ChannelReadings(
-        channel_id=str(item["id"]),
-        readings=tuple(
-            Reading(
-                dt=_parse_dt(r["dt"]) or datetime.fromtimestamp(0, tz=UTC),
-                value=float(r.get("value", 0.0)),
-                reading=float(r["reading"]) if r.get("reading") is not None else None,
-            )
-            for r in item.get("readings", []) or []
-        ),
-    )
+    points = []
+    for r in item.get("readings", []) or []:
+        try:
+            dt = datetime.fromisoformat(r["dt"])
+            value = float(r["value"])
+            reading = float(r["reading"]) if r.get("reading") is not None else None
+            if not math.isfinite(value) or (reading is not None and not math.isfinite(reading)):
+                raise ValueError("non-finite energy")
+        except (KeyError, TypeError, ValueError) as err:
+            raise EacApiError(
+                200, "Invalid reading timestamp or energy", "/api/portal/readings/list"
+            ) from err
+        points.append(Reading(dt=dt, value=value, reading=reading))
+    return ChannelReadings(channel_id=str(item["id"]), readings=normalize_readings(tuple(points)))
 
 
 def _parse_dt(s: str | None) -> datetime | None:
